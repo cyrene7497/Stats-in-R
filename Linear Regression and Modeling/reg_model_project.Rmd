@@ -1,0 +1,239 @@
+---
+title: "Modeling and Prediction of Critics' Score for Movies"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+```
+
+### Load data
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+
+
+* * *
+
+## Part 1: Data
+
+The data set is comprised of 651 randomly sampled movies that are listed both on IMDB and Rotten Tomatoes and were produced and released before 2016.Thus any analysis is generalizable to movies produced and released before 2016. Since there were no experimental groups or random assignment, any analysis on this data set cannot determine causality, only relationships and correlations.The variables in the data set are movie parameters listed on either website.  
+
+* * *
+
+## Part 2: Research questions
+
+In this project we will try to address a few questions: What variables are associated with a movie's critic score? Is there a relationship between the studio that produced the movie and it's general popularity? There are three variables related to popularity in this data set, `imdb_rating`, `critics_score`, and `audience_score`. I've noticed that my own opinions and personal rating of movies tends to differ from that of critics, so I want to consider the critic rating separately from the audience and imdb scores.  
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+
+First, let's visualize the distribution of ratings from IMDB and Rotten Tomatoes.
+```{r}
+hist(movies$imdb_rating, main= "Histogram of IMDB Movie Ratings", xlab = "IMDB rating", col = "lavenderblush")
+hist(movies$critics_score, main= "Histogram of Rotten Tomatoes Critics Score", xlab = "Rotten Tomatoes critics score", col = "lemonchiffon")
+hist(movies$audience_score, main = "Histogram of Rotten Tomatoes Audience Score", xlab= "Rotten Tomatoes audience score", col = "lightblue")
+```
+
+It looks like audience scores from IMDB and Rotten Tomatoes are both left skewed, implying that audiences more commonly give higher scores for movies than critics do. The critic scores histogram doesnt have any peaks and looks more uniform. It also appears that critics more commonly give a full score (100 points) to a movie than a member of the audience would. 
+
+Next I will combine the IMDB scores with the Rotten Tomatoes audience score to have an average audience score to form a new parameter. IMDB is on a 10 point scale so I'll scale it to match Rotten Tomatoes on a 100 point scale and average the two. I want to see if theres a relationship between audience scores and critic scores. 
+
+```{r}
+movies <- movies %>% mutate(audience_avg = (imdb_rating*10 + audience_score)/2)
+ggplot(data = movies, aes(x = audience_avg, y = critics_score)) + geom_jitter()
+```
+
+There are some surprising instances seen here on the graph, where a movie scored less than 25 points according to critics but scored quite high according to the audience. 
+
+* * *
+
+## Part 4: Modeling
+
+Using the previous scatterplot of the trend between the average audience rating and the critics score, we can check if the apparent trend in the plot is more than natural variation by fitting a linear model. We will build on this model to include other variables in the prediction of a critics score of a movie. The variables that we can consider in the analysis are: audience average rating (`audience_avg`), type of movie (`title_type`), `genre`, `runtime`, MPAA rating (`mpaa_rating`), `studio`, `audience_rating`, whether a movie won a best picture Oscar (`best_pic_win`), whether the movie had an oscar-winning actor (`best_actor_win`), or an Oscar-winning actress (`best_actress_win`), whether the director ever won an Oscar (`best_dir_win`), and whether the movie was in the Top 200 Box Office List (`top200_box`). Some irrelevant variables from the original data set would be the title, the release dates in theaters and DVD, actors in the abridged cast, who the director is (too unique in the sample) and the urls to the ratings. Besides these which aren't very meaningful, we also chose to exclude `imdb_rating`, `audience_score`, and `imdb_num_votes` because these are implicitly included with the variable previously created: audience average. We also chose to exclude best picture nomination because it would be related to best picture wins. 
+
+```{r}
+ggplot(data = movies, aes(x = audience_avg, y = critics_score)) +
+  geom_jitter() +
+  geom_smooth(method = "lm")
+```
+
+```{r}
+m_audience <- lm(critics_score ~ audience_avg, movies)
+summary(m_audience)
+```
+
+According to the linear model summary, the average of audience ratings is a statistically significant predictor of the critics score for a given movie. 
+
+To assess whether the linear model is reliable, we need to run some model diagnostics and check for (1) linearity, (2) nearly normal residuals, and (3) constant variability.
+
+```{r}
+#Linearity
+ggplot(data = m_audience, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Fitted values") +
+  ylab("Residuals")
+#Nearly normal residuals
+ggplot(data = m_audience, aes(x = .resid)) +
+  geom_histogram() +
+  xlab("Residuals")
+ggplot(data = m_audience, aes(sample = .resid)) +
+  stat_qq()
+```
+
+The residuals plot doesn't look completely random, but also doesn't look fan shaped. It's possible that the model isn't completely capturing the trend accurately. But otherwise the model meets the requirements of normally distributed residuals. 
+
+To make the best model that predicts a movie's critic score we will start with the above model and add the following variables one by one: audience average rating (`audience_avg`), type of movie (`title_type`), `genre`, `runtime`, MPAA rating (`mpaa_rating`), `studio`, whether a movie won a best picture Oscar (`best_pic_win`), whether the movie had an oscar-winning actor (`best_actor_win`), or an Oscar-winning actress (`best_actress_win`), whether the director ever won an Oscar (`best_dir_win`), and whether the movie was in the Top 200 Box Office List (`top200_box`). As mentioned earlier, some irrelevant variables from the original data set would be the title, the release dates in theaters and DVD, actors in the abridged cast, the director, and the urls to the ratings. Besides these which aren't very meaningful, we also chose to exclude `imdb_rating`, `audience_score`, and `imdb_num_votes` because these are implicitly included with the variable previously created: audience average. We also chose to exclude best picture nomination because it would be related to best picture wins.
+
+```{r}
+m_full <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box + director + studio, movies)
+#since the output is too large, we'll just show the adjusted R2 of the model
+#summary(m_full)
+summary(m_full)$adj.r.squared
+```
+
+The adjusted R^2 of the full model is 0.7063. We will now remove each variable one by one and see if any cause the adj R2 to increase. The coefficients of categorical variables represent how much the critic score would increase or decrease (depending on the sign of the coefficient) for that referenced category. For example, a Feature Films intercept would be 1.075e+01 higher than the listed intercept whereas a TV Movie's intercept would be 3.630e+01 higher. For numerical variables like `audience_avg`, the coefficient means for every point increase in `audience_avg` rating, the critic score will change by the listed coefficient in this case,  1.343e+00.
+
+```{r}
+m1 <- lm(critics_score ~ title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box + director + studio, movies)
+summary(m1)$adj.r.squared
+m2 <- lm(critics_score ~ audience_avg + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box + director + studio, movies)
+summary(m2)$adj.r.squared
+m3 <- lm(critics_score ~ audience_avg + title_type + runtime + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box + director + studio, movies)
+summary(m3)$adj.r.squared
+m4 <- lm(critics_score ~ audience_avg + title_type + genre + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box + director + studio, movies)
+summary(m4)$adj.r.squared
+m5 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box + director + studio, movies)
+summary(m5)$adj.r.squared
+m6 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating + best_actor_win + best_actress_win + best_dir_win + top200_box + director + studio, movies)
+summary(m6)$adj.r.squared
+m7 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actress_win + best_dir_win + top200_box + director + studio, movies)
+summary(m7)$adj.r.squared
+m8 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8)$adj.r.squared
+m9 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + top200_box + director + studio, movies)
+summary(m9)$adj.r.squared
+m10 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + director + studio, movies)
+summary(m10)$adj.r.squared
+m11 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box + studio, movies)
+summary(m11)$adj.r.squared
+m12 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box + director, movies)
+summary(m12)$adj.r.squared
+```
+
+Model 8 (`m8`), which is the model created when removing the variable `best_actress_win`, causes the largest increase in adj R2 so we'll continue eliminating variables from that model until removal of another variable does not increase adj R2. The new model adj R2 is 0.7170959.
+
+```{r}
+m8_1 <- lm(critics_score ~ title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_1)$adj.r.squared
+m8_2 <- lm(critics_score ~ audience_avg + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_2)$adj.r.squared
+m8_3 <- lm(critics_score ~ audience_avg + title_type + runtime + mpaa_rating +  best_pic_win + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_3)$adj.r.squared
+m8_4 <- lm(critics_score ~ audience_avg + title_type + genre + mpaa_rating +  best_pic_win + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_4)$adj.r.squared
+m8_5 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime +  best_pic_win + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_5)$adj.r.squared
+m8_6 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_6)$adj.r.squared
+m8_7 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_7)$adj.r.squared
+m8_8 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + top200_box + director + studio, movies)
+summary(m8_8)$adj.r.squared
+m8_9 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_dir_win + director + studio, movies)
+summary(m8_9)$adj.r.squared
+m8_10 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_dir_win + top200_box + studio, movies)
+summary(m8_10)$adj.r.squared
+m8_11 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating +  best_pic_win + best_actor_win + best_dir_win + top200_box + director, movies)
+summary(m8_11)$adj.r.squared
+```
+
+The 6th model (`m8_6`), made by removing `best_pic_win`, causes an increase of adjusted R2 to 0.7249346 so we will continue with that one. 
+
+```{r}
+m8_6_1 <- lm(critics_score ~ title_type + genre+ runtime + mpaa_rating + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_6_1)$adj.r.squared
+m8_6_2 <- lm(critics_score ~ audience_avg + genre+ runtime + mpaa_rating + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_6_2)$adj.r.squared
+m8_6_3 <- lm(critics_score ~ audience_avg + title_type + runtime + mpaa_rating + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_6_3)$adj.r.squared
+m8_6_4 <- lm(critics_score ~ audience_avg + title_type + genre + mpaa_rating + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_6_4)$adj.r.squared
+m8_6_5 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + best_actor_win + best_dir_win + top200_box + director + studio, movies)
+summary(m8_6_5)$adj.r.squared
+m8_6_6 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating + best_dir_win + top200_box + director + studio, movies)
+summary(m8_6_6)$adj.r.squared
+m8_6_7 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating + best_actor_win + top200_box + director + studio, movies)
+summary(m8_6_7)$adj.r.squared
+m8_6_8 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating + best_actor_win + best_dir_win + director + studio, movies)
+summary(m8_6_8)$adj.r.squared
+m8_6_9 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating + best_actor_win + best_dir_win + top200_box + studio, movies)
+summary(m8_6_9)$adj.r.squared
+m8_6_10 <- lm(critics_score ~ audience_avg + title_type + genre+ runtime + mpaa_rating + best_actor_win + best_dir_win + top200_box + director, movies)
+summary(m8_6_10)$adj.r.squared
+```
+The second and seventh output made by removing `title_type` and `best_dir_win` respectively, are the highest and the same as the previous adjusted R2 so we will combine those models for the finals one
+
+```{r}
+m8_6_27_1 <- lm(critics_score ~ genre+ runtime + mpaa_rating + best_actor_win + top200_box + director + studio, movies)
+summary(m8_6_27_1)$adj.r.squared
+m8_6_27_2 <- lm(critics_score ~ audience_avg + runtime + mpaa_rating + best_actor_win + top200_box + director + studio, movies)
+summary(m8_6_27_2)$adj.r.squared
+m8_6_27_3 <- lm(critics_score ~ audience_avg + genre + mpaa_rating + best_actor_win + top200_box + director + studio, movies)
+summary(m8_6_27_3)$adj.r.squared
+m8_6_27_4 <- lm(critics_score ~ audience_avg + genre+ runtime + best_actor_win + top200_box + director + studio, movies)
+summary(m8_6_27_4)$adj.r.squared
+m8_6_27_5 <- lm(critics_score ~ audience_avg + genre+ runtime + mpaa_rating + top200_box + director + studio, movies)
+summary(m8_6_27_5)$adj.r.squared
+m8_6_27_6 <- lm(critics_score ~ audience_avg + genre+ runtime + mpaa_rating + best_actor_win + director + studio, movies)
+summary(m8_6_27_6)$adj.r.squared
+m8_6_27_7 <- lm(critics_score ~ audience_avg + genre+ runtime + mpaa_rating + best_actor_win + top200_box + studio, movies)
+summary(m8_6_27_7)$adj.r.squared
+m8_6_27_8 <- lm(critics_score ~ audience_avg + genre+ runtime + mpaa_rating + best_actor_win + top200_box + director, movies)
+summary(m8_6_27_8)$adj.r.squared
+```
+
+Removing another variable doesn't increase the adjusted R2 so we return to the previous model. 
+```{r}
+m_best <- lm(critics_score ~ audience_avg + genre+ runtime + mpaa_rating + best_actor_win + top200_box + director + studio, movies)
+summary(m_best)$adj.r.squared
+```
+
+
+* * *
+
+## Part 5: Prediction
+
+Lets try to predict the critic score for a movie from 2016 that is not included in this sample. On IMDB I searched for 2016 movies and one of the top results was Rogue One: A Star Wars Story, so we will use that for the prediction. I'll get the necessary information for the model from IMDB and Rotten Tomatoes.  
+
+```{r}
+#Make sure the movie isn't already in the sample
+movies %>% filter(title == 'Rogue One: A Star Wars Story')
+rogue_audience_avg <- (7.8 * 10 + 86)/2
+newmovie <- data.frame(audience_avg = rogue_audience_avg, genre = 'Action & Adventure', runtime = 133, mpaa_rating = 'PG-13', best_actor_win = 'no', top200_box = 'yes', director = 'Gareth Edwards', studio = 'Walt Disney Pictures')
+predict(m_best, newmovie)
+predict(m_best, newmovie, interval = "prediction", level = 0.95)
+```
+
+This means that we are 95% confident that a movie with parameters like Rogue One would get a critics score of 13 to 165. The model fits the score to 89 which is actually pretty close to the reported score on Rotten Tomatoes: 84. 
+
+* * *
+
+## Part 6: Conclusion
+
+The data found some parameters that are useful in predicting a critics score for a movie. Some such parameters were the average audience score between IMDB and Rotten Tomatoes, the genre, runtime, rating, whether or not the movie had an actor who received an Oscar award, whether the movie was in the top200 box office movies, who the director was, and which studio produced the movie. However one limitation that I noticed, was that some of these parameters have too many levels (such as the director variable) yet somehow increased the adjusted R2. Another shortcoming with the 95% confidence interval was that it exceeds the upper limit of possible scores. A movie can only receive a maximum score of 100 so the 95% confidence interval with an upper limit of 165 doesn't make sense practically. According to the data where we created the best model, it seems that the three variables that when removed decreased the adj R2 the most were the audience average, genre, and director. We can infer that these are strongly correlated with the critics score given to a movie. 
