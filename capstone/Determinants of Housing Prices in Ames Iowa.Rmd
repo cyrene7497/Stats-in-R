@@ -1,0 +1,434 @@
+---
+title: "Determinants of Housing Prices in Ames, Iowa"
+output:
+  html_document: 
+    pandoc_args: [
+      "--number-sections",
+    ]
+---
+# Determinants of Housing Prices in Ames, Iowa
+## Background
+
+As a statistical consultant working for a real estate investment firm, your task is to develop a model to predict the selling price of a given home in Ames, Iowa. Your employer hopes to use this information to help assess whether the asking price of a house is higher or lower than the true value of the house. If the home is undervalued, it may be a good investment for the firm.
+
+## Training Data and relevant packages
+
+In order to better assess the quality of the model you will produce, the data have been randomly divided into three separate pieces: a training data set, a testing data set, and a validation data set. For now we will load the training data set, the others will be loaded and used later.
+
+```{r load, message = FALSE}
+load("ames_train.Rdata")
+```
+
+
+```{r packages, message = FALSE}
+library(statsr)
+library(dplyr)
+library(BAS)
+library(ggplot2)
+library(MASS)
+library(gridExtra)
+```
+
+### Exploratory Data Analysis (EDA)
+
+When you first get your data, it's very tempting to immediately begin fitting models and assessing how they perform.  However, before you begin modeling, it's absolutely essential to explore the structure of the data and the relationships between the variables in the data set.
+
+Do a detailed EDA of the ames_train data set, to learn about the structure of the data and the relationships between the variables in the data set (refer to Introduction to Probability and Data, Week 2, for a reminder about EDA if needed). Your EDA should involve creating and reviewing many plots/graphs and considering the patterns and relationships you see. 
+
+After you have explored completely, submit the three graphs/plots that you found most informative during your EDA process, and briefly explain what you learned from each (why you found each informative).
+
+#### Price and Area
+
+* * *
+In the first histogram we see that the variable we are trying to predict in this project, the response variable `price`, is right-skewed, meaning that most homes in the training data set are in the lower price range, with few homes sold at much higher prices. The size variable `area`, a predictor variable of `price`, is also right skewed with most homes between 1,000 - 2,000 square feet, and with a few houses above 3,000 square feet. When these two variables are plotted against each other, we see a mostly-linear relationship with increasing variability as the homes get larger. However, when these variables are log-transformed, the linear relationship between these two variables is greatly improved. In the rest of this analysis, `price` and `area` will continue to be log-transformed since they are right-skewed and always have values greater than 0. 
+
+```{r creategraphs}
+summary(ames_train$price)
+summary(ames_train$area)
+ggplot(data = ames_train, aes(x = price)) + geom_histogram(bins = 25) + geom_vline(xintercept = mean(ames_train$price), linetype = "dashed", color = "purple") + geom_label(label = "Mean Price", x = mean(ames_train$price)+30000, y = 100, label.padding = unit(0.3, "lines"), label.size = .35, color = "purple") + geom_vline(xintercept = median(ames_train$price), color = "light blue") + geom_label(label = "Median Price", x = median(ames_train$price)-40000, y = 150, label.padding = unit(0.3, "lines"), label.size = .35, color = "light blue")
+ggplot(data = ames_train, aes(x = area)) + geom_histogram(bins = 50) + geom_vline(xintercept = mean(ames_train$area), linetype = "dashed", color = "purple") + geom_label(label = "Mean Area", x = mean(ames_train$area) + 300, y = 75, label.padding = unit(0.3, "lines"), label.size = .35, color = "purple") + geom_vline(xintercept = median(ames_train$area), color = "light blue") + geom_label(label = "Median Area", x = median(ames_train$area) - 350, y = 55, label.padding = unit(0.3, "lines"), label.size = .35, color = "light blue")
+areaplot <- ggplot(ames_train, aes(x = area, y = price)) + geom_point() + geom_smooth(method = "lm")
+logareaplot <- ggplot(ames_train, aes(x = log(area), y = log(price))) + geom_point() + geom_smooth(method = "lm")
+grid.arrange(areaplot, logareaplot, nrow = 1)
+```
+
+* * *
+#### Sale Conditions
+
+* * * 
+In a linear model, we assume that all observations in the data are generated from the same process.  However, houses sold in abnormal sale conditions do not exhibit the same behavior as houses sold in normal sale conditions. A house sold under abnormal conditions often sells for much less than expected given its square footage.  Similarly, a partial sale of a house results in a higher price on average holding constant square footage.  However, one partial sale has a total square footage of over 4000, which is highly influential on the regression results. Since the relationship between log(`price`) and log(`area`) varies by sale conditions, a linear regression model should be fitted separately for different sale conditions. Because houses with non-normal selling conditions exhibit atypical behavior and can disproportionately influence the model, the rest of this analysis will only model housing prices under normal sale conditions, which also has the most observations in the data set, comprising 83.4% of the original data set.  
+```{r}
+ggplot(data = ames_train, aes(x = log(area), y = log(price), col = Sale.Condition)) + geom_jitter() + stat_smooth(method = "lm", se = FALSE)
+normal <- ames_train %>% filter(Sale.Condition == 'Normal')
+print(paste('The percentage of the original observations remaining is', nrow(normal)/nrow(ames_train)*100))
+```
+* * * 
+#### Neighborhoods
+The mantra in real estate is "Location, Location, Location!" Below is a graphical display that relates a home price to its neighborhood in Ames, Iowa. The median price is the most relevant summary statistic in determining the most expensive and least expensive neighborhoods. The IQR is the most relevant summary statistic in determining the most heterogenous neighborhood in terms of price. However, when included in the model, `Neighborhood` wasn't very useful since it has 27 levels and many of the levels overlap each other as seen in the first boxplot. Using the summary of the `price` variable, the `Neighborhood` variable was re-leveled by quartile of `price` overall. This new variable, `NeighborhoodGrouped`, has 4 levels and narrows the spread of each level so that there is less overlap between levels. 
+* * *
+```{r}
+normal$Neighborhood = with(normal, reorder(Neighborhood, log(price), median))
+neighborhoods <- ggplot(normal, aes(x = log(price), y = Neighborhood, fill = Neighborhood)) + geom_boxplot()
+neighborhoods
+```
+```{r}
+pricesum <- summary(normal$price)
+qt1 <- pricesum["1st Qu."]
+med <- pricesum["Median"]
+qt3 <- pricesum["3rd Qu."]
+normal %>% group_by(Neighborhood) %>% summarise(median= median(price), .groups = 'drop') %>% filter(median <= qt1)
+normal %>% group_by(Neighborhood) %>% summarise(median= median(price), .groups = 'drop') %>% filter(median > qt1 & median <= med)
+normal %>% group_by(Neighborhood) %>% summarise(median= median(price), .groups = 'drop') %>% filter(median > med & median <= qt3)
+normal %>% group_by(Neighborhood) %>% summarise(median= median(price), .groups = 'drop') %>% filter(median > qt3)
+```
+```{r}
+normal <- normal %>% mutate(NeighborhoodGrouped = Neighborhood)
+levels(normal$NeighborhoodGrouped)[levels(normal$NeighborhoodGrouped)%in%c("MeadowV", "BrDale", "IDOTRR", "OldTown", "Blueste", "BrkSide", "Edwards")]<-"Group1" 
+levels(normal$NeighborhoodGrouped)[levels(normal$NeighborhoodGrouped)%in%c("SWISU", "Sawyer", "NAmes", "NPkVill")]<- "Group2"
+levels(normal$NeighborhoodGrouped)[levels(normal$NeighborhoodGrouped)%in%c("Mitchel", "SawyerW", "Gilbert", "ClearCr", "NWAmes", "Blmngtn", "CollgCr", "Crawfor")]<- "Group3"
+ levels(normal$NeighborhoodGrouped)[levels(normal$NeighborhoodGrouped)%in%c("Greens", "Veenker", "Somerst","Timber","StoneBr", "GrnHill", "NoRidge", "NridgHt")]<-"Group4"
+```
+```{r}
+group_neighborhood_price <- with(normal, reorder(NeighborhoodGrouped, log(price), median))
+groupedneighborhoods <- ggplot(normal, aes(x = log(price), y = group_neighborhood_price, fill = group_neighborhood_price)) + geom_boxplot()
+groupedneighborhoods
+```
+
+* * * 
+
+###Development and assessment of an initial model, following a semi-guided process of analysis
+
+#### An Initial Model
+In building a model, it is often useful to start by creating a simple, intuitive initial model based on the results of the exploratory data analysis. (Note: The goal at this stage is **not** to identify the "best" possible model but rather to choose a reasonable and understandable starting point. Later you will expand and revise this model to create your final model.
+
+Based on your EDA, select *at most* 10 predictor variables from “ames_train” and create a linear model for `price` (or a transformed version of price) using those variables. Provide the *R code* and the *summary output table* for your model, a *brief justification* for the variables you have chosen, and a *brief discussion* of the model results in context (focused on the variables that appear to be important predictors and how they relate to sales price).
+
+* * *
+For the initial model, I chose variables that I expected to contribute to `price`, mostly variables related to a home's location (`NeighborhoodGrouped`), size(log(`area`), log(`Lot.Area`)), `Garage.Cars`, `Full.Bath`, `Half.Bath`, `Bedroom.AbvGr`), age(`Year.Built`), and quality(`Overall.Qual`, `Central.Air`). The variables `price`, `area`, and `Lot.Area` are log-transformed, and `Neighborhood` is re-leveled to `NeighborhoodGrouped`. The initial linear regression model is as follows: 
+$$ log(price) = 2.529 + .49 log(area) + .091 Overall.Qual + .039 Garage.Cars - .030 Full.Bath$$ 
+$$- .035 Half.Bath -.030 Bedroom.AbvGr + .002 Year.Built +.122 log(Lot.Area) + .188 Central.Air$$
+$$+ .070 NeighborhoodGroupedGroup2 + .077 NeighborhoodGroupedGroup3 $$
+$$+ .177 NeighborhoodGroupedGroup4$$
+
+Coefficients for log(`area`) and log(`Lot.Area`) show that the unit changes in these variables increase the prediction of log(`price`) by .490% and .122%, respectively, when everything else is held constant. `NeighborhoodGrouped` Group 1 is used as a reference level to groups 2, 3, and 4 which all increase the predicted `price` by .070%, .077%, and .177% respectively. Increasing the `Year.Built` increases `price` by only .002%. The quality variables `Overall.Qual` and `Central.Air` both increase the projected `price` by .091% and .188% respectively. Among the other variables which enumerate other specific qualities of any given house, increasing `BedroomAbvGr`, `Half.Bath`, or `Full.Bath` is shown to depreciate the home `price` in this model. Larger houses on average have more bedrooms and bathrooms and would sell for a higher price, however if size is held constant, the number of bedrooms and bathrooms decreases the property value. This model can be used to predict home price, but is not proper for testing hypotheses related to the relationship of these variables. 
+
+```{r fit_model}
+i_model <- lm(log(price) ~ log(area) + Overall.Qual +  Garage.Cars + Full.Bath + Half.Bath + Bedroom.AbvGr + Year.Built + log(Lot.Area) +  Central.Air + NeighborhoodGrouped, data = normal)
+summary(i_model)
+```
+
+* * *
+
+#### Model Selection
+
+Now either using `BAS` another stepwise selection procedure choose the "best" model you can, using your initial model as your starting point. Try at least two different model selection methods and compare their results. Do they both arrive at the same model or do they disagree? What do you think this means?
+
+* * *
+To refine and select a better model, I started with my initial model (i_model) and used the stepwise methods to select a single parsimonious model. The function stepAIC using BIC(Bayesian Information Criteria) as a criterion (in which k=log(n)) returned the same linear model (imodel_BIC) but without the bathroom variables, `Full.Bath` and `Half.Bath`, as the best model. The bayesian linear model (imodel_bas) using BMA (Bayesian Model Averaging) as a criterion also selected the same model as BIC (removing `Full.Bath` and `Half.Bath`) with the same remaining variables (8 variables) as the best model, but with different coefficients. It's possible that these two variables were removed because they are corelated to other variables like bedroom number in a house. 
+
+```{r model_select}
+imodel_BIC <- stepAIC(i_model, k = log(nrow(normal)))
+summary(imodel_BIC)
+imodel_bas <- bas.lm(log(price) ~ log(area) + Overall.Qual +  Garage.Cars + Full.Bath + Half.Bath + Bedroom.AbvGr + Year.Built + log(Lot.Area) +  Central.Air + NeighborhoodGrouped, data = normal, prior = "BIC", modelprior = uniform())
+summary(imodel_bas)
+coef(imodel_bas)
+```
+
+* * *
+
+#### Initial Model Residuals
+One way to assess the performance of a model is to examine the model's residuals. In the space below, create a residual plot for your preferred model from above and use it to assess whether your model appears to fit the data well. Comment on any interesting structure in the residual plot (trend, outliers, etc.) and briefly discuss potential implications it may have for your model and inference / prediction you might produce.
+
+* * *
+
+The following residual plots show that the initial model (i_model) satisfies the assumptions of linear regression modeling. These criteria are:
+1. the variance of the residues are almost constant 
+2. the residuals show a nearly linear relationship
+3. the residuals are nearly-normally distributed 
+4. the residuals are independent (there is no particular pattern observed in the residuals)
+Cook’s distance plot shows the most influential (leveraging) outliers (observation 611, 21, 325). Observation 325 has an extreme lot.area (i.e., 19,800 sq ft). Observation 21 has extreme value on Year.Built(1880). Observation 611 is an  extreme value in the NeighborhoodGrouped (Group1). To explain these outliers, this linear model might not include critical variables necessary to predict these houses. Therefore, adding more variables might resolve this outlier issue.
+```{r model_resid}
+par(mfrow = c(2,2))
+plot(i_model, which = 1, pch = 16, cex = .7, col = "light blue")
+plot(i_model, which = 2, pch = 16, cex = .7, col = "light blue")
+hist(i_model$resid, col = "light blue")
+plot(i_model$resid, pch = 16, cex = 0.7, col = "light blue")
+par(mfrow = c(1,2))
+plot(i_model, which = 3, col = "light blue")
+plot(i_model, which = 4, col = "light blue")
+```
+
+* * *
+
+#### Initial Model RMSE
+
+You can calculate it directly based on the model output. Be specific about the units of your RMSE (depending on whether you transformed your response variable). The value you report will be more meaningful if it is in the original units (dollars).
+
+* * *
+One metric for comparing out-of-sample performance for multiple models is called root mean squared error (RMSE).  Within the context of linear modeling, this involves taking the square root of the mean of the squared residuals. In general, the better the model fit, the lower the RMSE.The RMSE for the frequentist linear model (i_model) is $24,405.07 while the RMSE for the bayesian model (i_model_bas) was slightly higher, $24,527.42.
+
+```{r model_rmse}
+pred.imodel.train <- exp(predict(i_model, normal))
+resid.imodel.train <- normal$price - pred.imodel.train
+RMSE.imodel.train <- sqrt(mean(resid.imodel.train^2))                
+RMSE.imodel.train 
+pred.im_BIC.train <- exp(predict(imodel_BIC, normal))
+resid.im_BIC.train <- normal$price - pred.im_BIC.train
+RMSE.im_BIC.train <- sqrt(mean(resid.im_BIC.train^2))
+RMSE.im_BIC.train
+pred.im_bas.train <- exp(predict(imodel_bas, data = normal, estimator = "BMA")$fit)
+resid.im_bas.train <- normal$price - pred.im_bas.train
+RMSE.im_bas.train <- sqrt(mean(resid.im_bas.train^2))                
+RMSE.im_bas.train 
+```
+
+* * *
+
+#### Overfitting 
+
+The process of building a model generally involves starting with an initial model (as you have done above), identifying its shortcomings, and adapting the model accordingly. This process may be repeated several times until the model fits the data reasonably well. However, the model may do well on training data but perform poorly out-of-sample (meaning, on a dataset other than the original training data) because the model is overly-tuned to specifically fit the training data. This is called “overfitting.” To determine whether overfitting is occurring on a model, compare the performance of a model on both in-sample and out-of-sample data sets. To look at performance of your initial model on out-of-sample data, you will use the data set `ames_test`.
+
+```{r loadtest, message = FALSE}
+load("ames_test.Rdata")
+```
+
+Use your model from above to generate predictions for the housing prices in the test data set.  Are the predictions significantly more accurate (compared to the actual sales prices) for the training data than the test data?  Why or why not? Briefly explain how you determined that (what steps or processes did you use)?
+
+* * *
+The RMSE for the frequentist model is still smaller than that of the bayesian model when used with out-of-sample data (ames_test). Each of these is higher than their respective training data RMSEs. The test data RMSE for i_model (frequentist) is $26,257.29 while that of i_model_bas (bayesian) is $26,311.66. Since they are slightly greater than that of the training data (24,405 and 24,527), the models are "over-fitting" with the training data. However, since the model is built to fit the training data, it will generally fit out-of-sample data worse.  As a result, the RMSE for predictions to out-of-sample data will generally be higher. 
+
+One way to assess how well a model reflects uncertainty is determining coverage probability.  For example, if assumptions are met, a 95\% prediction interval for `price` should include the true value of `price` roughly 95\% of the time.  If the true proportion of out-of-sample prices that fall within the 95\% prediction interval are significantly greater than or less than 0.95, then some assumptions regarding uncertainty may not be met. This initial model has a coverage of roughly 95% so we can say that it properly reflects uncertainty.
+
+```{r initmodel_test}
+normal_test <- ames_test %>% filter(Sale.Condition == "Normal") %>% mutate(NeighborhoodGrouped = Neighborhood)
+levels(normal_test$NeighborhoodGrouped)[levels(normal_test$NeighborhoodGrouped)%in%c("MeadowV", "BrDale", "IDOTRR", "OldTown", "Blueste", "BrkSide", "Edwards")]<-"Group1" 
+levels(normal_test$NeighborhoodGrouped)[levels(normal_test$NeighborhoodGrouped)%in%c("SWISU", "Sawyer", "NAmes", "NPkVill", "Landmrk")]<- "Group2"
+levels(normal_test$NeighborhoodGrouped)[levels(normal_test$NeighborhoodGrouped)%in%c("Mitchel", "SawyerW", "Gilbert", "ClearCr", "NWAmes", "Blmngtn", "CollgCr", "Crawfor")]<- "Group3"
+ levels(normal_test$NeighborhoodGrouped)[levels(normal_test$NeighborhoodGrouped)%in%c("Greens", "Veenker", "Somerst","Timber","StoneBr", "GrnHill", "NoRidge", "NridgHt")]<-"Group4"
+```
+```{r}
+pred.im.test <- exp(predict(i_model, normal_test))
+resid.im.test <- normal_test$price - pred.im.test
+RMSE.im.test <- sqrt(mean(resid.im.test^2))                
+RMSE.im.test
+pred.im_BIC.test <- exp(predict(imodel_BIC, normal_test))
+resid.im_BIC.test <- normal_test$price - pred.im_BIC.test
+RMSE.im_BIC.test <- sqrt(mean(resid.im_BIC.test^2))
+RMSE.im_BIC.test
+```
+```{r}
+pred.im_bas.test <- exp(predict(imodel_bas, normal_test, estimator = "BMA")$fit)
+resid.im_bas.test <- normal_test$price - pred.im_bas.test
+RMSE.im_bas.test <- sqrt(mean(resid.im_bas.test^2))                
+RMSE.im_bas.test 
+```
+```{r}
+int.im.test <- exp(predict(i_model, normal_test, interval = "prediction"))
+cover.im.test <- mean(normal_test$price > int.im.test[,"lwr"] &
+                            normal_test$price < int.im.test[,"upr"])
+cover.im.test
+```
+
+* * *
+
+**Note to the learner:** If in real-life practice this out-of-sample analysis shows evidence that the training data fits your model a lot better than the test data, it is probably a good idea to go back and revise the model (usually by simplifying the model) to reduce this overfitting. For simplicity, we do not ask you to do this on the assignment, however.
+
+### Development of a Final Model
+
+Now that you have developed an initial model to use as a baseline, create a final model with *at most* 20 variables to predict housing prices in Ames, IA, selecting from the full array of variables in the dataset and using any of the tools that we introduced in this specialization.  
+
+Carefully document the process that you used to come up with your final model, so that you can answer the questions below.
+
+#### Final Model
+
+Provide the summary table for your model.
+
+* * *
+The final model (f_model) is as follows:
+$$log(price) = 0.001 + .492 log(area) + .073 Overall.Qual + .039 Garage.Cars - .026 Half.Bath$$
+$$ -.039 Bedroom.AbvGr +.003 Year.Built + .130 log(Lot.Area) + .081 Central.Air $$
+$$ + .064 NeighborhoodGroupedGroup2 + .059 NeighborhoodGroupedGroup3 $$
+$$+ .173 NeighborhoodGroupedGroup4 + .029 log(Total.Bsmt.SF + 1)$$
+
+```{r model_playground}
+f_model <- lm(log(price) ~ log(area) + Overall.Qual +  Garage.Cars + Full.Bath + Half.Bath + Bedroom.AbvGr + Year.Built + log(Lot.Area) +  Central.Air + NeighborhoodGrouped + log(Total.Bsmt.SF + 1) + log(Garage.Area + 1) + Overall.Cond, data = normal)
+summary(f_model)
+fm_BIC <- stepAIC(f_model, k = log(nrow(normal)))
+summary(fm_BIC)
+fm_bas <- bas.lm(log(price) ~ log(area) + Overall.Qual +  Garage.Cars + Full.Bath + Half.Bath + Bedroom.AbvGr + Year.Built + log(Lot.Area) +  Central.Air + NeighborhoodGrouped + log(Total.Bsmt.SF + 1) + log(Garage.Area + 1) + Overall.Cond, data = normal, prior = "BIC", modelprior = uniform())
+summary(fm_bas)
+```
+
+* * *
+
+#### Transformation
+
+Did you decide to transform any variables?  Why or why not? Explain in a few sentences.
+
+* * *
+As shown in 2.1.1 Price and Area, the response variable `price` and size variable `area` were both log-transformed to make their relationship more linear and here we can see the same for the `Lot.Area` variable. Some other variables like `Garage.Area` and `Total.Bsmt.SF` were also log-transformed. These two, `Garage.Area` and `Total.Bsmt.SF` also had 1 added to all values before transforming since these variables can take values equal to zero (since $\log(0) = -\infty$). 
+
+`Neighborhood` is a categorical variable with 27 levels, some of which have a lot of overlap so it was releveled into 4 different groups (Group1, Group2, Group3, and Group4) in the `NeighborhoodGrouped` variable, seen in 2.1.3 Neighborhoods. These groups were made by the quantiles of the original `Neighborhood` variable's median prices. 
+```{r model_assess}
+lotarea <- ggplot(data = normal, aes(x = Lot.Area, y = price)) + geom_point() + geom_smooth(method = "lm")
+loglotarea <- ggplot(data = normal, aes(x = log(Lot.Area), y = log(price))) + geom_point() + geom_smooth(method = "lm")
+grid.arrange(lotarea, loglotarea, nrow = 1)
+neighborhoods
+groupedneighborhoods
+```
+
+* * *
+
+#### Variable Interaction
+
+Did you decide to include any variable interactions? Why or why not? Explain in a few sentences.
+
+* * *
+When predictive variables are correlated, including both variables in the model cause redunant fitting and produce not-relaible coefficients. When `Bedroom.AbvGr` or `Full.bath` are both used in the linear-model agaisnt `price`, these variables have a positive correlation with the `price` seen by their positive coefficients in the linear model. However, when these variable are linear-modeled with `area` variable, the model shows the negative coefficients for `Bedroom.AbvGr` or `Full.bath` as seen in the summary of i_model. Thus I did not include any variable interactions to avoid redundant correlations. 
+
+* * *
+
+#### Variable Selection
+
+What method did you use to select the variables you included? Why did you select the method you used? Explain in a few sentences.
+
+* * *
+I decided to categorize the variables in the data set into ones that I thought would generally contribute to `price`. The `price` of a home is generally determined by its location, size, age and quality. I choose `NeighborhoodGrouped` (the releveled `Neighborhood`) to represent a home's location which gives 3 variables (Groups 2, 3, and 4 with Group 1 as the reference). As size variables, I included 4 variables: `area`, `Lot.Area`, `Garage.Area`, and `Bsmt.Fin.SF` (finished basement areas). I chose `Year.Built` to represent a home's age. To assess quality, I included 7 variables: `Garage.Cars`, `Overall.Cond`, `Overall.Qual`, `Full.Bath`, `Half.Bath`, `Bedroom.AbvGr`, and `Central.Air`.
+
+Some variables are not included due to remote relationship to the `price`, while some other variables are not included due to the collinearity with variables which are included in this model.
+
+I picked fm_BIC model as my prediction model, based on the squared R value and significance of variables in the model. Therefore the `Garage.Area` and `Full.Bath` variables are removed. 
+
+* * *
+
+#### Model Testing
+
+How did testing the model on out-of-sample data affect whether or how you changed your model? Explain in a few sentences.
+
+* * *
+Testing the final model with out-of-sample data gives slightly greater RMSE than one with train data; $ 24,306.57 (out-of-sample) vs $ 22,821.09 (training data). However, this value has decreased from the inital model which gives RMSE of $ 26,467.19 with out-of-sample data, and $ 24644.17 with the training data. This slight overfitting can be further improved by simplifying this model. 
+
+Coverage probablity for the final model (94.86%) is close to 95% with the out-of-sample data, suggesting that the final model properly reflects uncertainty. However, the 95 % prediction interval is a little bit wide.
+
+```{r model_testing}
+pred.fm_BIC.train <- exp(predict(fm_BIC, normal))
+resid.fm_BIC.train <- normal$price - pred.fm_BIC.train
+RMSE.fm_BIC.train <- sqrt(mean(resid.fm_BIC.train^2))
+RMSE.fm_BIC.train
+pred.fm_BIC.test <- exp(predict(fm_BIC, normal_test))
+resid.fm_BIC.test <- normal_test$price - pred.fm_BIC.test
+RMSE.fm_BIC.test <- sqrt(mean(resid.fm_BIC.test^2))
+RMSE.fm_BIC.test
+int.fm_BIC.test <- round(exp(predict(fm_BIC, normal_test, interval = "prediction")))
+cover.fm_BIC.test <- mean(normal_test$price > int.fm_BIC.test[, "lwr"] & normal_test$price < int.fm_BIC.test[, "upr"]) 
+cover.fm_BIC.test
+```
+
+* * *
+
+### Final Model Assessment
+
+#### Final Model Residual
+
+For your final model, create and briefly interpret an informative plot of the residuals.
+
+* * *
+The residual plots for the final model show that this model satisfies the model assumptions: constant variance, linearity, normal distribution, and independence of the residuals. However, there are a few outliers affecting these assumptions. Cook’s distance shows three outliers having some influence in the final model (#21, #560, #611). The function, hatvalues, returns the most leveraging home (#506). Two of these four outliers are houses that were built in 1880 which is significantly earlier than many of the other houses. It's possible that this fact contributes to other differences that make it an outlier. Home #611 has the highest leverage, with the sold price of $40,000 compared to the predicted vale($84,440), while predicted prices for home #21 and home #560 ($182,109	 and $158,874, respectively) were much lower than actual sold price ($265,979 and $230,000, respectively). A high leverging home does not necessarily have high residuals as seen with home #506 where the predicted price for this home is $135,669 and the actual sale price is $131,000.
+```{r}
+par(mfrow = c(2,2))
+plot(fm_BIC, which = 1, pch = 16, cex = .7, col = "light blue")
+plot(fm_BIC, which = 2, pch = 16, cex = .7, col = "light blue")
+hist(fm_BIC$resid, col = "light blue")
+plot(fm_BIC$resid, pch = 16, cex = 0.7, col = "light blue")
+par(mfrow = c(1,2))
+plot(fm_BIC, which = 3, col = "light blue")
+plot(fm_BIC, which = 4, col = "light blue")
+which(hatvalues(fm_BIC) == max(hatvalues(fm_BIC)))
+```
+```{r}
+outlier <- normal[c(21, 506, 560, 611), ]
+p.price <- round(exp(predict(fm_BIC, outlier)))
+outlier$prediction <- p.price
+outlier %>% dplyr::select(prediction, price, Lot.Area, Year.Built)
+```
+
+* * *
+
+#### Final Model RMSE
+
+For your final model, calculate and briefly comment on the RMSE.
+
+* * *
+The final models RMSE is lower than that of the initial model for both the training and the testing data. Overfitting was also improved as it was $1,823.017 for the initial model and $1,485.479 for the final model. 
+```{r}
+RMSE.im_BIC.train
+RMSE.im_BIC.test
+RMSE.im_BIC.test - RMSE.im_BIC.train
+RMSE.fm_BIC.train
+RMSE.fm_BIC.test
+RMSE.fm_BIC.test - RMSE.fm_BIC.train
+```
+
+* * *
+
+#### Final Model Evaluation
+
+What are some strengths and weaknesses of your model?
+
+* * *
+
+This final model might be considered quite successful in terms of ability to explain the variation in sale price (R^2 = 90.96%) and only 9.04% of the variation in price remained unexplained by this model. This model also can tell the contribution of each explanatory variable in the model. However, 95 % prediction intervals are still too wide. Collecting more data observations or new predictor variables such as school district information (elementary, middle, and high school) or other amenities in the area might tignten up this interval.
+
+* * *
+
+#### Final Model Validation
+
+Testing your final model on a separate, validation data set is a great way to determine how your model will perform in real-life practice. 
+
+You will use the “ames_validation” dataset to do some additional assessment of your final model. Discuss your findings, be sure to mention:
+* What is the RMSE of your final model when applied to the validation data?  
+* How does this value compare to that of the training data and/or testing data?
+* What percentage of the 95% predictive confidence (or credible) intervals contain the true price of the house in the validation data set?  
+* From this result, does your final model properly reflect uncertainty?
+
+```{r loadvalidation, message = FALSE}
+load("ames_validation.Rdata")
+```
+
+* * *
+
+The RMSE of the final model is $21,844.61 with the validation data. This value is lower than those from training data or test data($24,644.17 or $26,467.19, respectively). Coverage probality, that the 95% predictive confidence intervals contain the true price of the house in the validation data set, is just under 95%, at 94.5%. Therefore I can conclude that my final model properly reflect uncertainty.
+
+```{r model_validate}
+normal_val <- ames_validation %>% filter(Sale.Condition == "Normal")
+normal_val <- normal_val %>% mutate(NeighborhoodGrouped = Neighborhood)
+levels(normal_val$NeighborhoodGrouped)[levels(normal_val$NeighborhoodGrouped)%in%c("MeadowV", "BrDale", "IDOTRR", "OldTown", "Blueste", "BrkSide", "Edwards")]<-"Group1" 
+levels(normal_val$NeighborhoodGrouped)[levels(normal_val$NeighborhoodGrouped)%in%c("SWISU", "Sawyer", "NAmes", "NPkVill")]<- "Group2"
+levels(normal_val$NeighborhoodGrouped)[levels(normal_val$NeighborhoodGrouped)%in%c("Mitchel", "SawyerW", "Gilbert", "ClearCr", "NWAmes", "Blmngtn", "CollgCr", "Crawfor")]<- "Group3"
+ levels(normal_val$NeighborhoodGrouped)[levels(normal_val$NeighborhoodGrouped)%in%c("Greens", "Veenker", "Somerst","Timber","StoneBr", "GrnHill", "NoRidge", "NridgHt")]<-"Group4"
+```
+```{r}
+pred.fm_BIC.val <- exp(predict(fm_BIC, normal_val))
+resid.fm_BIC.val <- normal_val$price - pred.fm_BIC.val
+RMSE.fm_BIC.val <- sqrt(mean(resid.fm_BIC.val^2))                
+RMSE.fm_BIC.val 
+pred.fm_bas.val <- exp(predict(fm_bas, normal_val, estimator = "BMA")$fit)
+resid.fm_bas.val <- normal_val$price - pred.fm_bas.val
+RMSE.fm_bas.val <- sqrt(mean(resid.fm_bas.val^2))                
+RMSE.fm_bas.val 
+int.fm_BIC.val <- round(exp(predict(fm_BIC, normal_val, interval = "prediction")))
+cover.fm_BIC.val <- mean(normal_val$price > int.fm_BIC.val[,"lwr"] &
+                            normal_val$price < int.fm_BIC.val[,"upr"])
+cover.fm_BIC.val
+```
+
+* * *
+
+### Conclusion
+
+Provide a brief summary of your results, and a brief discussion of what you have learned about the data and your model. 
+
+* * *
+
+My final model(fm_BIC) is a decent model with high adjusted R^2 (90.9%) and good coverage probability. However, the 95% prediction range is quite wide. It seems that the predictability is more precise at homes with lower sale prices. Many of the variables included in the data set are already related to each other, so although there are many variables to choose from, too many would introduce redundancy to the model. Maybe the predictability would be better if other variables were included that wouldn't correlate to existing variables. This model showed that the location, size, quality, home age, and some other specifications are deciding predictors for the home price, as I guessed. In addition, `Half.Bath` also turned out to be a predictor for the home price, moreso than `Full.Bath` which was surprising. I learned that selection of the variables for the initial model is very critical for the development to the final model. 
+* * *
