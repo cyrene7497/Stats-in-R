@@ -1,0 +1,919 @@
+---
+title: "Bayesian modeling of movie data"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+library(BAS)
+library(broom)
+```
+
+### Load data
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+* * *
+
+## Part 1: Data
+
+The data set is comprised of 651 randomly sampled movies produced and released before 2016.Thus any analysis is generalizable to movies produced and released before 2016. Since there were no experimental groups or random assignment, any analysis on this data set cannot determine causality, only relationships and correlations.
+
+* * *
+
+## Part 2: Data manipulation
+
+```{r}
+#Create new variable based on `title_type`: New variable should be called `feature_film` with levels yes (movies that are feature films) and no
+summary(movies$title_type)
+movies <- movies %>% mutate(feature_film = ifelse(as.character(title_type) == "Feature Film", "yes", "no"))
+movies %>% group_by(feature_film) %>% summarise(count = n())
+```
+```{r}
+#Create new variable based on `genre`: New variable should be called `drama` with levels yes (movies that are dramas) and no
+summary(movies$genre)
+movies <- movies %>% mutate(drama = ifelse(as.character(genre) == "Drama", "yes", "no"))
+movies %>% group_by(drama) %>% summarise(count = n())
+```
+
+```{r}
+#Create new variable based on `mpaa_rating`: New variable should be called `mpaa_rating_R` with levels yes (movies that are R rated) and no
+summary(movies$mpaa_rating)
+movies <- movies %>% mutate(mpaa_rating_R = ifelse(as.character(mpaa_rating) == "R", "yes", "no"))
+movies %>% group_by(mpaa_rating_R) %>% summarise(count = n())
+```
+
+```{r}
+#Create two new variables based on `thtr_rel_month`: New variable called `oscar_season` with levels yes (if movie is released in November, October, or December) and no (2 pt) New variable called `summer_season` with levels yes (if movie is released in May, June, July, or August) and no 
+summary(movies$thtr_rel_month)
+oscar_month <- c(11, 10, 12)
+movies <- movies %>% mutate(oscar_season = ifelse(thtr_rel_month %in% oscar_month, "yes", "no"))
+movies %>% select(oscar_season, thtr_rel_month) %>% head(movies, n = 10)
+
+summer_months <- c(5,6,7,8)
+movies <- movies %>% mutate(summer_season = ifelse(thtr_rel_month %in% summer_months, "yes", "no"))
+movies %>% select(summer_season, thtr_rel_month) %>% head(movies, n = 10)
+```
+* * *
+
+## Part 3: Exploratory data analysis
+
+Conduct exploratory data analysis of the relationship between `audience_score` 
+and the new variables constructed in the previous part
+```{r}
+#Audience score vs feature film and title type
+ggplot(data = movies, aes(x = title_type, y = audience_score, fill = feature_film)) + geom_boxplot()
+ggplot(data = movies, aes(x = feature_film, y = audience_score, fill = feature_film)) + geom_boxplot()
+```
+
+The audience scores for feature films seem to typically be less than that of documentaries and TV movies. When combining TV movie scores with Documentaries, Feature Films still score less in audience scores. 
+
+```{r}
+#Audience score vs dramas and genres
+ggplot(data = movies, aes(x = genre, y = audience_score, fill = drama)) + geom_boxplot()
+ggplot(data = movies, aes(x = drama, y = audience_score, fill = drama)) + geom_boxplot()
+```
+
+Compared to all the other genres, Drama's score somewhere in the middle range with three different genres having a higher median and the rest scoring generally below dramas. When combined using the `drama` variable, drama's have a slightly higher median audience score than all the other genre's combined. 
+
+```{r}
+#Audience score vs MPAA rating and specifically R-rated movies
+ggplot(data = movies, aes(x = mpaa_rating, y = audience_score, fill = mpaa_rating_R)) + geom_boxplot()
+ggplot(data = movies, aes(x = mpaa_rating_R, y = audience_score, fill = mpaa_rating_R)) + geom_boxplot()
+```
+
+When separated by rating, all the movies generally fall into a similar range except for Unrated movies which are a bit higher but also have some low scored outliers. The R rated movies have an distribution of audience scores that is very similar to that of PG rated movies. When combining all the movies besides R using the `mpaa_rating_R` variable, the distributions end up being very similar. 
+
+```{r}
+#Audience scores vs Oscar seasons
+ggplot(data = movies, aes(x = as.character(thtr_rel_month), y = audience_score, fill = oscar_season)) + geom_boxplot() + xlab("Theater Release Month")
+ggplot(data = movies, aes(x = oscar_season, y = audience_score, fill = oscar_season)) + geom_boxplot()
+```
+
+Movies released during the Oscar Season (months 10, 11, and 12) have median audience scores that are only slightly higher than the rest. 
+
+```{r}
+#Audience scores vs summer seasons
+ggplot(data = movies, aes(x = as.character(thtr_rel_month), y = audience_score, fill = summer_season)) + geom_boxplot() + xlab("Theater Release Month")
+ggplot(data = movies, aes(x = summer_season, y = audience_score, fill = summer_season)) + geom_boxplot()
+```
+
+Movies realeased in the summer season (months 5 6 7 and 8) have about the same median audience scores as other movies. 
+* * *
+
+## Part 4: Modeling
+
+Develop a Bayesian regression model to predict `audience_score` using the following explanatory variables: `feature_film`, `drama`, `runtime`, `mpaa_rating_R`, `thtr_rel_year`, `oscar_season`, `summer_season`, `imdb_rating`, `imdb_num_votes`, `critics_score`, `best_pic_nom`, `best_pic_win`, `best_actor_win`, `best_actress_win`, `best_dir_win`, and `top200_box`. For the regression model we will start with some exploration of `audience_score` since it will be the response variable in the model. 
+
+```{r}
+ggplot(data = movies, aes(x = audience_score)) + geom_histogram()
+summary(movies$audience_score)
+```
+
+The median of the distribution is 65. This also shows us that 25% of these randomly sampled movies scored at least 80 points. The distribution is left skewed which means that in this data set, more movies have audience scores above the mean than below it. 
+
+```{r}
+m_audscore_full <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + thtr_rel_year + oscar_season + summer_season + imdb_rating + imdb_num_votes + critics_score + best_pic_nom + best_pic_win + best_actor_win + best_actress_win + best_dir_win + top200_box, data = movies)
+tidy(m_audscore_full)
+```
+
+As you can see from a quick summary of the full linear model, many coefficients  of independent variables are not statistically significant. We will use the Bayesian Information Criterion (BIC), as our criterion for model selection. BIC is based on model fit, while simultaneously penalizing the number of parameters in proportion to the sample size.
+
+```{r}
+BIC(m_audscore_full)
+```
+
+now we will remove variables and see which ones when removed cause the BIC to decrease. 
+```{r}
+#Step 1 of model selection
+m_audscore_wo_v1 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + thtr_rel_year
+                       + oscar_season + summer_season + imdb_rating + imdb_num_votes + 
+                         critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                         best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v2 <-lm(audience_score ~ feature_film + runtime + mpaa_rating_R + thtr_rel_year + 
+                        oscar_season + summer_season + imdb_rating + imdb_num_votes + 
+                        critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                        best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v3 <- lm(audience_score ~ feature_film + drama + mpaa_rating_R + thtr_rel_year + 
+                         oscar_season + summer_season + imdb_rating + imdb_num_votes + 
+                         critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                         best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v4 <- lm(audience_score ~ feature_film + drama + runtime + thtr_rel_year + 
+                         oscar_season + summer_season + imdb_rating + imdb_num_votes + 
+                         critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                         best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v5 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                         oscar_season + summer_season + imdb_rating + imdb_num_votes + 
+                         critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                         best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v6 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                         thtr_rel_year + summer_season + imdb_rating + imdb_num_votes + 
+                         critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                         best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v7 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                         thtr_rel_year + oscar_season + imdb_rating + imdb_num_votes + 
+                         critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                         best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v8 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                         thtr_rel_year + oscar_season + summer_season + imdb_num_votes + 
+                         critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                         best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v9 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                         thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                         critics_score + best_pic_nom + best_pic_win + best_actor_win + 
+                         best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v10 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + best_pic_nom + best_pic_win + best_actor_win + 
+                          best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v11 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_win + best_actor_win + 
+                          best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v12 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_actor_win + 
+                          best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v13 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actress_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v14 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_dir_win + top200_box, data = movies)
+m_audscore_wo_v15 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + top200_box, data = movies)
+m_audscore_wo_v16 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+BIC(m_audscore_wo_v1)
+BIC(m_audscore_wo_v2)
+BIC(m_audscore_wo_v3)
+BIC(m_audscore_wo_v4)
+BIC(m_audscore_wo_v5)
+BIC(m_audscore_wo_v6)
+BIC(m_audscore_wo_v7)
+BIC(m_audscore_wo_v8)
+BIC(m_audscore_wo_v9)
+BIC(m_audscore_wo_v10)
+BIC(m_audscore_wo_v11)
+BIC(m_audscore_wo_v12)
+BIC(m_audscore_wo_v13)
+BIC(m_audscore_wo_v14)
+BIC(m_audscore_wo_v15)
+BIC(m_audscore_wo_v16)
+```
+
+the BIC of the model without the 16th variable, `top200_box`, is the lowest, so we'll continue to step with that model. 
+
+```{r}
+#Eliminated `top200_box` in step 1. Step 2 of selection:
+m_audscore1_wo_v1 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v2 <- lm(audience_score ~ feature_film + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v3 <- lm(audience_score ~ feature_film + drama + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v4 <- lm(audience_score ~ feature_film + drama + runtime + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v5 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v6 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v7 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v8 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v9 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                           critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v10 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v11 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v12 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v13 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                           best_actress_win + best_dir_win, data = movies)
+m_audscore1_wo_v14 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_dir_win, data = movies)
+m_audscore1_wo_v15 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + oscar_season + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win, data = movies)
+BIC(m_audscore1_wo_v1)
+BIC(m_audscore1_wo_v2)
+BIC(m_audscore1_wo_v3)
+BIC(m_audscore1_wo_v4)
+BIC(m_audscore1_wo_v5)
+BIC(m_audscore1_wo_v6)
+BIC(m_audscore1_wo_v7)
+BIC(m_audscore1_wo_v8)
+BIC(m_audscore1_wo_v9)
+BIC(m_audscore1_wo_v10)
+BIC(m_audscore1_wo_v11)
+BIC(m_audscore1_wo_v12)
+BIC(m_audscore1_wo_v13)
+BIC(m_audscore1_wo_v14)
+BIC(m_audscore1_wo_v15)
+```
+
+From a BIC of 4927.764 we can bring the BIC down to 4921.56 by removing `oscar_season`. 
+
+```{r}
+#Removed `oscar_season` in step 2. Step 3 of selection:
+m_audscore2_wo_v1 <- lm(audience_score ~  drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v2 <- lm(audience_score ~ feature_film + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v3 <- lm(audience_score ~ feature_film + drama + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v4 <- lm(audience_score ~ feature_film + drama + runtime +  
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v5 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                           summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v6 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v7 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v8 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                           critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v9 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v10 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_win + 
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v11 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v12 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                         best_actress_win + best_dir_win, data = movies)
+m_audscore2_wo_v13 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_dir_win, data = movies)
+m_audscore2_wo_v14 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom + best_pic_win + 
+                          best_actor_win + best_actress_win, data = movies)
+BIC(m_audscore2_wo_v1)
+BIC(m_audscore2_wo_v2)
+BIC(m_audscore2_wo_v3)
+BIC(m_audscore2_wo_v4)
+BIC(m_audscore2_wo_v5)
+BIC(m_audscore2_wo_v6)
+BIC(m_audscore2_wo_v7)
+BIC(m_audscore2_wo_v8)
+BIC(m_audscore2_wo_v9)
+BIC(m_audscore2_wo_v10)
+BIC(m_audscore2_wo_v11)
+BIC(m_audscore2_wo_v12)
+BIC(m_audscore2_wo_v13)
+BIC(m_audscore2_wo_v14)
+```
+
+from a BIC of 4921, the BIC was brought down to 4915.554 by removing `best_pic_win`. 
+
+```{r}
+#Removed `best_pic_win` in step 3. Step 4 of selection:
+m_audscore3_wo_v1 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v2 <- lm(audience_score ~ feature_film + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v3 <- lm(audience_score ~ feature_film + drama + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v4 <- lm(audience_score ~ feature_film + drama + runtime + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v5 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                           summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v6 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v7 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season +  
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v8 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v9 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + best_pic_nom +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v10 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score +  
+                          best_actor_win + best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v11 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                           best_actress_win + best_dir_win, data = movies)
+m_audscore3_wo_v12 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_dir_win, data = movies)
+m_audscore3_wo_v13 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+BIC(m_audscore3_wo_v1)
+BIC(m_audscore3_wo_v2)
+BIC(m_audscore3_wo_v3)
+BIC(m_audscore3_wo_v4)
+BIC(m_audscore3_wo_v5)
+BIC(m_audscore3_wo_v6)
+BIC(m_audscore3_wo_v7)
+BIC(m_audscore3_wo_v8)
+BIC(m_audscore3_wo_v9)
+BIC(m_audscore3_wo_v10)
+BIC(m_audscore3_wo_v11)
+BIC(m_audscore3_wo_v12)
+BIC(m_audscore3_wo_v13)
+```
+
+The biggest decrease in BIC was found when removing `best_dir_win` which brought the BIC to 4910.045
+
+```{r}
+#Removed `best_dir_win` in step 4. Step 5 of selection:
+m_audscore4_wo_v1 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v2 <- lm(audience_score ~ feature_film + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v3 <- lm(audience_score ~ feature_film + drama + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v4 <- lm(audience_score ~ feature_film + drama + runtime + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v5 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                           summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v6 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v7 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season +
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v8 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v9 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v10 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score +   
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore4_wo_v11 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                           best_actress_win, data = movies)
+m_audscore4_wo_v12 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year + summer_season + imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win, data = movies)
+BIC(m_audscore4_wo_v1)
+BIC(m_audscore4_wo_v2)
+BIC(m_audscore4_wo_v3)
+BIC(m_audscore4_wo_v4)
+BIC(m_audscore4_wo_v5)
+BIC(m_audscore4_wo_v6)
+BIC(m_audscore4_wo_v7)
+BIC(m_audscore4_wo_v8)
+BIC(m_audscore4_wo_v9)
+BIC(m_audscore4_wo_v10)
+BIC(m_audscore4_wo_v11)
+BIC(m_audscore4_wo_v12)
+```
+
+The BIC was made lowest (4905.283) when `summer_season` was removed from the model. 
+
+```{r}
+#Removed `summer_season` in step 5. Step 6 of selection:
+m_audscore5_wo_v1 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v2 <- lm(audience_score ~ feature_film + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v3 <- lm(audience_score ~ feature_film + drama +  mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v4 <- lm(audience_score ~ feature_film + drama + runtime + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v5 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                           imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v6 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v7 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v8 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes +  best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v9 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore5_wo_v10 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                           best_actress_win, data = movies)
+m_audscore5_wo_v11 <- lm(audience_score ~ feature_film + drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win, data = movies)
+BIC(m_audscore5_wo_v1)
+BIC(m_audscore5_wo_v2)
+BIC(m_audscore5_wo_v3)
+BIC(m_audscore5_wo_v4)
+BIC(m_audscore5_wo_v5)
+BIC(m_audscore5_wo_v6)
+BIC(m_audscore5_wo_v7)
+BIC(m_audscore5_wo_v8)
+BIC(m_audscore5_wo_v9)
+BIC(m_audscore5_wo_v10)
+BIC(m_audscore5_wo_v11)
+```
+
+The BIC was made lowest (4900.403) when `feature_film` was removed from the model. 
+
+```{r}
+#Removed `feature_film` in step 6. Step 7 of selection:
+m_audscore6_wo_v1 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore6_wo_v2 <- lm(audience_score ~ drama + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore6_wo_v3 <- lm(audience_score ~ drama + runtime + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore6_wo_v4 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore6_wo_v5 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+  
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore6_wo_v6 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore6_wo_v7 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore6_wo_v8 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + 
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore6_wo_v9 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                           best_actress_win, data = movies)
+m_audscore6_wo_v10 <- lm(audience_score ~ drama + runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win, data = movies)
+BIC(m_audscore6_wo_v1)
+BIC(m_audscore6_wo_v2)
+BIC(m_audscore6_wo_v3)
+BIC(m_audscore6_wo_v4)
+BIC(m_audscore6_wo_v5)
+BIC(m_audscore6_wo_v6)
+BIC(m_audscore6_wo_v7)
+BIC(m_audscore6_wo_v8)
+BIC(m_audscore6_wo_v9)
+BIC(m_audscore6_wo_v10)
+```
+
+The BIC is made lowest (4895.167) when `drama` is removed from the model. 
+
+```{r}
+#removed `drama` in step 7. Step 8 of selection:
+m_audscore7_wo_v1 <- lm(audience_score ~ mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore7_wo_v2 <- lm(audience_score ~ runtime +
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore7_wo_v3 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore7_wo_v4 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore7_wo_v5 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore7_wo_v6 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore7_wo_v7 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore7_wo_v8 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actress_win, data = movies)
+m_audscore7_wo_v9 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                          imdb_num_votes + critics_score + best_pic_nom +  
+                          best_actor_win, data = movies)
+BIC(m_audscore7_wo_v1)
+BIC(m_audscore7_wo_v2)
+BIC(m_audscore7_wo_v3)
+BIC(m_audscore7_wo_v4)
+BIC(m_audscore7_wo_v5)
+BIC(m_audscore7_wo_v6)
+BIC(m_audscore7_wo_v7)
+BIC(m_audscore7_wo_v8)
+BIC(m_audscore7_wo_v9)
+```
+
+The BIC is made lowest (4890.199) when `imdb_num_votes` is removed from the model. 
+
+```{r}
+#removed `imdb_num_votes` in step 8. Step 9:
+m_audscore8_wo_v1 <- lm(audience_score ~ mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore8_wo_v2 <- lm(audience_score ~ runtime + 
+                          thtr_rel_year+ imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore8_wo_v3 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore8_wo_v4 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+  
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore8_wo_v5 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                           best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore8_wo_v6 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                           critics_score +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore8_wo_v7 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actress_win, data = movies)
+m_audscore8_wo_v8 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          thtr_rel_year+ imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win, data = movies)
+BIC(m_audscore8_wo_v1)
+BIC(m_audscore8_wo_v2)
+BIC(m_audscore8_wo_v3)
+BIC(m_audscore8_wo_v4)
+BIC(m_audscore8_wo_v5)
+BIC(m_audscore8_wo_v6)
+BIC(m_audscore8_wo_v7)
+BIC(m_audscore8_wo_v8)
+```
+
+The BIC is made lowest (4885.766) when `thtr_rel_year` is removed from the model. 
+
+```{r}
+#removed `thtr_rel_year` in step 9. Step 10:
+m_audscore9_wo_v1 <- lm(audience_score ~ mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore9_wo_v2 <- lm(audience_score ~ runtime +  
+                          imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore9_wo_v3 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore9_wo_v4 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                          best_pic_nom +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore9_wo_v5 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score +  
+                          best_actor_win + best_actress_win, data = movies)
+m_audscore9_wo_v6 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actress_win, data = movies)
+m_audscore9_wo_v7 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actor_win, data = movies)
+BIC(m_audscore9_wo_v1)
+BIC(m_audscore9_wo_v2)
+BIC(m_audscore9_wo_v3)
+BIC(m_audscore9_wo_v4)
+BIC(m_audscore9_wo_v5)
+BIC(m_audscore9_wo_v6)
+BIC(m_audscore9_wo_v7)
+```
+
+The BIC is made lowest (4881.39) when `best_actor_win` is removed from the model. 
+
+```{r}
+#removed `best_actor_win` in step 10. Step 11 of selection:
+m_audscore10_wo_v1 <- lm(audience_score ~ mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actress_win, data = movies)
+m_audscore10_wo_v2 <- lm(audience_score ~ runtime + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom +  
+                          best_actress_win, data = movies)
+m_audscore10_wo_v3 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          critics_score + best_pic_nom +  
+                          best_actress_win, data = movies)
+m_audscore10_wo_v4 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           best_pic_nom +  
+                          best_actress_win, data = movies)
+m_audscore10_wo_v5 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score +  
+                          best_actress_win, data = movies)
+m_audscore10_wo_v6 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom, data = movies)
+BIC(m_audscore10_wo_v1)
+BIC(m_audscore10_wo_v2)
+BIC(m_audscore10_wo_v3)
+BIC(m_audscore10_wo_v4)
+BIC(m_audscore10_wo_v5)
+BIC(m_audscore10_wo_v6)
+```
+
+The BIC is made lowest (4877.909) when `best_actress_win` is removed from the model. 
+
+```{r}
+#removed `best_actress_win` in step 11. Step 12 of selection:
+m_audscore11_wo_v1 <- lm(audience_score ~ mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom, data = movies)
+m_audscore11_wo_v2 <- lm(audience_score ~ runtime + 
+                          imdb_rating + 
+                           critics_score + best_pic_nom, data = movies)
+m_audscore11_wo_v3 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          critics_score + best_pic_nom, data = movies)
+m_audscore11_wo_v4 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           best_pic_nom, data = movies)
+m_audscore11_wo_v5 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score, data = movies)
+BIC(m_audscore11_wo_v1)
+BIC(m_audscore11_wo_v2)
+BIC(m_audscore11_wo_v3)
+BIC(m_audscore11_wo_v4)
+BIC(m_audscore11_wo_v5)
+```
+
+The BIC is made lowest (4874.484) when `best_pic_nom` is removed from the model. 
+
+```{r}
+#removed `best_pic_nom` in step 12. Step 13 of selection:
+m_audscore12_wo_v1 <- lm(audience_score ~ mpaa_rating_R + 
+                          imdb_rating + 
+                           critics_score, data = movies)
+m_audscore12_wo_v2 <- lm(audience_score ~ runtime +  
+                          imdb_rating + 
+                           critics_score, data = movies)
+m_audscore12_wo_v3 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          critics_score, data = movies)
+m_audscore12_wo_v4 <- lm(audience_score ~ runtime + mpaa_rating_R + 
+                          imdb_rating, data = movies)
+BIC(m_audscore12_wo_v1)
+BIC(m_audscore12_wo_v2)
+BIC(m_audscore12_wo_v3)
+BIC(m_audscore12_wo_v4)
+```
+
+The BIC is made lowest (4871.623) when `mpaa_rating_R` is removed from the model. 
+
+```{r}
+#removed `mpaa_rating_R` in step 13. Step 14:
+m_audscore13_wo_v1 <- lm(audience_score ~ imdb_rating + 
+                           critics_score, data = movies)
+m_audscore13_wo_v2 <- lm(audience_score ~ runtime +  
+                          critics_score, data = movies)
+m_audscore13_wo_v3 <- lm(audience_score ~ runtime +  
+                          imdb_rating, data = movies)
+BIC(m_audscore13_wo_v1)
+BIC(m_audscore13_wo_v2)
+BIC(m_audscore13_wo_v3)
+
+```
+
+The BIC doesn't lower upon the removal of any of these variables so the final model will include `runtime`, `imdb_rating`, and `critics_score`. 
+
+```{r}
+#final model
+m_audscore_final <- lm(audience_score ~ runtime + imdb_rating + critics_score, data = movies)
+BIC(m_audscore_final)
+summary(m_audscore_final)
+```
+
+The coefficients of these predictor variables indicate a few things:
+ - with every increase in runtime by 1  minute, we can expect the audience score to decrease by .05 points
+ - with a point increase on the imdb_rating, we can expect audience score to increase by 14 points on average
+ - with an increase in the critics_score by 1 point, we can expect the audience score to increase by .07 points 
+ 
+Now we will run some model diagonistics on the variables we've deemed to be decent predictors. 
+
+```{r}
+m_audscore_final_aug <- augment(m_audscore_final)
+
+#Linearity and constant variance
+ggplot(data = m_audscore_final_aug, aes(x = .fitted, y = .resid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Fitted values", y = "Residuals")
+
+#Normality
+ggplot(data = m_audscore_final_aug, aes(x = .resid)) +
+  geom_histogram(binwidth = 5) +
+  xlab("Residuals")
+```
+
+The residuals plot seems to be in a fan shape indicating that the model may not be accounting for all the relationships between the variables. But they do seem mostly normally distributed. 
+* * *
+
+## Part 5: Prediction
+
+NOTE: Insert code chunks as needed by clicking on the "Insert a new code chunk" 
+button above. Make sure that your code is visible in the project you submit. 
+Delete this note when before you submit your work.
+
+```{r}
+#Pick a movie from 2016 (a new movie that is not in the sample) and do a prediction for this movie using your the model you developed and the `predict` function in R.
+movies %>% filter(title == 'Train to Busan')
+#the movie isnt in the data set already so we can do a prediction
+#Data for this movie came from the IMDB's and Rotten Tomatoes website
+busan <- data.frame(runtime = 118, imdb_rating = 7.5, critics_score = 94)
+predict(m_audscore_final, busan)
+predict(m_audscore_final, busan, interval = "prediction", level = .95)
+```
+The actual audience score on Rotten Tomatoes is 88. 
+* * *
+
+## Part 6: Conclusion
+Using the variable given to us and the one's generated from the data, we found that the best model for predicting a movie's audience score on Rotten Tomatoes depends mainly on three variables: the movie's runtime, the IMDB rating, and the critics score on Rotten Tomatoes. Of the variables explored in the EDA section, the ones that didnt show much difference visually were all understandably eliminated from the model. This model was selected by choosing the one with the lowest BIC. In the above prediction, the model isn't perfect but in the ball park, the 95% confidence interval of the prediction is quite large, predicting that the score could be anywhere between 59 and 99, while the actual score is 88. One short coming of the predictor variables that we chose from was that many had multiple levels which could make prediction difficult. 
